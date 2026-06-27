@@ -1,0 +1,750 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>AR 動物臉 · Animal Face AR</title>
+<style>
+* { margin:0; padding:0; box-sizing:border-box; }
+
+body {
+  background:#000;
+  overflow:hidden;
+  width:100vw; height:100dvh;
+  font-family:'Helvetica Neue',sans-serif;
+  touch-action:none;
+}
+
+#wrapper {
+  position:relative;
+  width:100vw; height:100dvh;
+}
+
+/* camera feed */
+#video {
+  position:absolute; inset:0;
+  width:100%; height:100%;
+  object-fit:cover;
+  transform: scaleX(-1); /* mirror for selfie feel */
+}
+
+/* Three.js overlay */
+#three-canvas {
+  position:absolute; inset:0;
+  width:100%; height:100%;
+  pointer-events:none;
+}
+
+/* face mesh debug canvas (hidden) */
+#mesh-canvas {
+  position:absolute; inset:0;
+  width:100%; height:100%;
+  pointer-events:none;
+  display:none;
+}
+
+/* ── HUD ── */
+#hud {
+  position:absolute; inset:0;
+  pointer-events:none;
+  display:flex; flex-direction:column;
+  justify-content:space-between;
+  padding:env(safe-area-inset-top,20px) 0 env(safe-area-inset-bottom,20px);
+}
+
+/* top bar */
+#top-bar {
+  display:flex; justify-content:space-between; align-items:center;
+  padding:14px 18px;
+}
+#app-title {
+  color:#fff;
+  font-size:15px; font-weight:600;
+  letter-spacing:.06em;
+  text-shadow:0 1px 8px rgba(0,0,0,.6);
+}
+#cam-toggle {
+  pointer-events:all;
+  background:rgba(0,0,0,.4);
+  border:1px solid rgba(255,255,255,.18);
+  border-radius:50%;
+  width:38px; height:38px;
+  color:#fff; font-size:18px;
+  cursor:pointer;
+  display:flex; align-items:center; justify-content:center;
+  backdrop-filter:blur(8px);
+}
+
+/* speech bubble + status */
+#speech-area {
+  display:flex; flex-direction:column; align-items:center; gap:10px;
+  padding:0 20px 8px;
+}
+
+#speech-bubble {
+  background:rgba(0,0,0,.55);
+  border:1px solid rgba(255,255,255,.14);
+  border-radius:20px;
+  padding:10px 20px;
+  color:#fff;
+  font-size:14px;
+  letter-spacing:.04em;
+  backdrop-filter:blur(12px);
+  max-width:90vw;
+  text-align:center;
+  transition:opacity .3s;
+}
+#speech-bubble.dim { opacity:.4; }
+
+#mic-row {
+  display:flex; align-items:center; gap:10px;
+  pointer-events:all;
+}
+
+#mic-btn {
+  width:52px; height:52px;
+  border-radius:50%;
+  border:none;
+  background:linear-gradient(135deg,#ff5f6d,#ffc371);
+  color:#fff; font-size:22px;
+  cursor:pointer;
+  box-shadow:0 4px 18px rgba(255,100,80,.5);
+  display:flex; align-items:center; justify-content:center;
+  transition:transform .15s, box-shadow .15s;
+}
+#mic-btn.listening {
+  background:linear-gradient(135deg,#43e97b,#38f9d7);
+  box-shadow:0 0 0 8px rgba(56,249,215,.22), 0 4px 18px rgba(56,249,215,.4);
+  animation:pulse 1.2s ease-in-out infinite;
+}
+@keyframes pulse {
+  0%,100%{transform:scale(1);}
+  50%{transform:scale(1.08);}
+}
+#mic-label {
+  color:rgba(255,255,255,.7);
+  font-size:12px; letter-spacing:.08em;
+}
+
+/* animal selector chips */
+#animal-chips {
+  pointer-events:all;
+  display:flex; flex-wrap:wrap; justify-content:center; gap:7px;
+  padding:0 16px 4px;
+}
+.chip {
+  background:rgba(0,0,0,.45);
+  border:1px solid rgba(255,255,255,.18);
+  border-radius:30px;
+  padding:5px 13px;
+  color:rgba(255,255,255,.75);
+  font-size:12px;
+  cursor:pointer;
+  backdrop-filter:blur(8px);
+  transition:background .15s, border-color .15s, transform .12s;
+  user-select:none;
+}
+.chip:hover, .chip.active {
+  background:rgba(255,255,255,.18);
+  border-color:rgba(255,255,255,.5);
+  color:#fff;
+  transform:scale(1.06);
+}
+
+/* animal name overlay (big pop) */
+#animal-label {
+  position:absolute;
+  top:22%;
+  left:50%;
+  transform:translateX(-50%) scale(0);
+  font-size:34px; font-weight:800;
+  letter-spacing:.06em;
+  color:#fff;
+  text-shadow:0 0 30px currentColor, 0 2px 8px rgba(0,0,0,.8);
+  pointer-events:none;
+  transition:transform .35s cubic-bezier(.34,1.56,.64,1), opacity .3s;
+  white-space:nowrap;
+}
+#animal-label.show { transform:translateX(-50%) scale(1); }
+#animal-label.hide { transform:translateX(-50%) scale(0); opacity:0; }
+
+/* loading overlay */
+#loading {
+  position:absolute; inset:0;
+  background:#000;
+  display:flex; flex-direction:column;
+  align-items:center; justify-content:center;
+  gap:16px; z-index:99;
+  transition:opacity .6s;
+}
+#loading.gone { opacity:0; pointer-events:none; }
+#loading-icon { font-size:42px; animation:spin 1.5s linear infinite; }
+@keyframes spin { to{transform:rotate(360deg);} }
+#loading-text { color:rgba(255,255,255,.7); font-size:13px; letter-spacing:.1em; }
+
+/* permission prompt */
+#perm-prompt {
+  position:absolute; inset:0;
+  background:rgba(0,0,0,.92);
+  display:none; flex-direction:column;
+  align-items:center; justify-content:center;
+  gap:18px; z-index:100; padding:30px;
+  text-align:center;
+}
+#perm-prompt.show { display:flex; }
+#perm-prompt h2 { color:#fff; font-size:20px; }
+#perm-prompt p { color:rgba(255,255,255,.55); font-size:13px; line-height:1.7; }
+#perm-btn {
+  background:linear-gradient(135deg,#667eea,#764ba2);
+  color:#fff; border:none; border-radius:30px;
+  padding:12px 32px; font-size:15px; cursor:pointer;
+  box-shadow:0 4px 20px rgba(102,126,234,.5);
+}
+</style>
+</head>
+<body>
+<div id="wrapper">
+  <video id="video" playsinline autoplay muted></video>
+  <canvas id="mesh-canvas"></canvas>
+  <canvas id="three-canvas"></canvas>
+
+  <div id="hud">
+    <div id="top-bar">
+      <div id="app-title">🐾 AR 動物臉</div>
+      <button id="cam-toggle" title="切換鏡頭">🔄</button>
+    </div>
+
+    <div id="animal-chips">
+      <div class="chip" data-animal="cat">🐱 貓</div>
+      <div class="chip" data-animal="dog">🐶 狗</div>
+      <div class="chip" data-animal="rabbit">🐰 兔子</div>
+      <div class="chip" data-animal="bear">🐻 熊</div>
+      <div class="chip" data-animal="fox">🦊 狐狸</div>
+      <div class="chip" data-animal="pig">🐷 豬</div>
+      <div class="chip" data-animal="tiger">🐯 老虎</div>
+      <div class="chip" data-animal="panda">🐼 熊貓</div>
+    </div>
+
+    <div id="speech-area">
+      <div id="speech-bubble" class="dim">說出動物名稱或點擊下方按鈕</div>
+      <div id="mic-row">
+        <button id="mic-btn">🎤</button>
+        <span id="mic-label">點擊開始語音</span>
+      </div>
+    </div>
+  </div>
+
+  <div id="animal-label"></div>
+
+  <div id="loading">
+    <div id="loading-icon">🐾</div>
+    <div id="loading-text">載入 AR 引擎中…</div>
+  </div>
+
+  <div id="perm-prompt">
+    <h2>需要鏡頭權限</h2>
+    <p>這個 AR 體驗需要使用相機來偵測人臉<br>並疊加動物臉部特效</p>
+    <button id="perm-btn">開啟相機</button>
+  </div>
+</div>
+
+<!-- Three.js -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<!-- MediaPipe Face Mesh -->
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh@0.4.1633559619/face_mesh.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils@0.3.1632432234/camera_utils.js"></script>
+
+<script>
+"use strict";
+
+// ── Elements ──────────────────────────────────────────────────
+const video       = document.getElementById('video');
+const threeCanvas = document.getElementById('three-canvas');
+const loadingEl   = document.getElementById('loading');
+const loadingText = document.getElementById('loading-text');
+const permPrompt  = document.getElementById('perm-prompt');
+const speechBubble= document.getElementById('speech-bubble');
+const micBtn      = document.getElementById('mic-btn');
+const micLabel    = document.getElementById('mic-label');
+const animalLabel = document.getElementById('animal-label');
+const camToggle   = document.getElementById('cam-toggle');
+const chips       = document.querySelectorAll('.chip');
+
+// ── State ─────────────────────────────────────────────────────
+let currentAnimal = null;
+let faceLandmarks = null;
+let useFrontCam   = true;
+let listening     = false;
+
+// ── Animal definitions ─────────────────────────────────────────
+// Each animal: emoji, color, features (ears, nose, etc.)
+const ANIMALS = {
+  cat:    { emoji:'🐱', label:'貓', color:0xf5c97c, earColor:0xff9eb5, noseColor:0xff88aa, ears:'pointy', nose:'cat',    whiskers:true,  stripes:false },
+  dog:    { emoji:'🐶', label:'狗', color:0xc8926a, earColor:0xa0623a, noseColor:0x222222, ears:'floppy', nose:'round',  whiskers:false, stripes:false },
+  rabbit: { emoji:'🐰', label:'兔子',color:0xffffff, earColor:0xffcccc, noseColor:0xff88aa, ears:'long',   nose:'cat',    whiskers:true,  stripes:false },
+  bear:   { emoji:'🐻', label:'熊',  color:0x8b6040, earColor:0x7a4f30, noseColor:0x333333, ears:'round',  nose:'bear',   whiskers:false, stripes:false },
+  fox:    { emoji:'🦊', label:'狐狸',color:0xe8762b, earColor:0xffffff, noseColor:0x222222, ears:'pointy', nose:'round',  whiskers:true,  stripes:false },
+  pig:    { emoji:'🐷', label:'豬',  color:0xf4a0b0, earColor:0xe8809a, noseColor:0xd06878, ears:'round',  nose:'pig',    whiskers:false, stripes:false },
+  tiger:  { emoji:'🐯', label:'老虎',color:0xf59c3a, earColor:0xf59c3a, noseColor:0xffffff, ears:'pointy', nose:'cat',    whiskers:true,  stripes:true  },
+  panda:  { emoji:'🐼', label:'熊貓',color:0xffffff, earColor:0x222222, noseColor:0x222222, ears:'round',  nose:'bear',   whiskers:false, stripes:false },
+};
+
+// ── Three.js setup ────────────────────────────────────────────
+const renderer = new THREE.WebGLRenderer({ canvas: threeCanvas, alpha:true, antialias:true });
+renderer.setPixelRatio(Math.min(window.devicePixelRatio,2));
+renderer.setSize(window.innerWidth, window.innerHeight);
+renderer.setClearColor(0x000000, 0);
+
+const scene  = new THREE.Scene();
+const camera = new THREE.OrthographicCamera(-1,1,1,-1,0.01,100);
+camera.position.z = 1;
+
+// Lighting
+const ambLight = new THREE.AmbientLight(0xffffff, 0.9);
+scene.add(ambLight);
+const dirLight = new THREE.DirectionalLight(0xffffff, 0.7);
+dirLight.position.set(0,1,2);
+scene.add(dirLight);
+
+// ── Mask group (rebuilt per animal) ──────────────────────────
+let maskGroup = null;
+
+function disposeMask() {
+  if (!maskGroup) return;
+  scene.remove(maskGroup);
+  maskGroup.traverse(obj => {
+    if (obj.geometry) obj.geometry.dispose();
+    if (obj.material) obj.material.dispose();
+  });
+  maskGroup = null;
+}
+
+function buildMask(animalKey) {
+  disposeMask();
+  if (!animalKey) return;
+  const def = ANIMALS[animalKey];
+  maskGroup = new THREE.Group();
+
+  const mat  = (col, opacity=1) => new THREE.MeshPhongMaterial({color:col, transparent:opacity<1, opacity, side:THREE.DoubleSide, shininess:30});
+  const flatMat = (col, opacity=1) => new THREE.MeshBasicMaterial({color:col, transparent:opacity<1, opacity, side:THREE.DoubleSide});
+
+  // ── Face base disc ────────────────────────────────────────
+  const faceGeo = new THREE.CircleGeometry(0.52, 48);
+  const faceMesh= new THREE.Mesh(faceGeo, mat(def.color, 0.82));
+  faceMesh.position.z = 0.01;
+  maskGroup.add(faceMesh);
+
+  // ── Ears ──────────────────────────────────────────────────
+  function addEars(type) {
+    if (type === 'pointy' || type === 'long') {
+      const h = type==='long' ? 0.72 : 0.38;
+      const w = type==='long' ? 0.13 : 0.20;
+      [-1,1].forEach(side => {
+        // outer ear
+        const eGeo = new THREE.ConeGeometry(w, h, 3);
+        const eMesh = new THREE.Mesh(eGeo, mat(def.color));
+        eMesh.position.set(side*0.32, 0.58 + h*0.4, 0);
+        if (type==='long') eMesh.rotation.z = side * 0.08;
+        maskGroup.add(eMesh);
+        // inner ear
+        const iGeo = new THREE.ConeGeometry(w*0.55, h*0.75, 3);
+        const iMesh = new THREE.Mesh(iGeo, mat(def.earColor, 0.9));
+        iMesh.position.set(side*0.32, 0.58 + h*0.38, 0.02);
+        if (type==='long') iMesh.rotation.z = side * 0.08;
+        maskGroup.add(iMesh);
+      });
+    } else if (type === 'floppy') {
+      [-1,1].forEach(side => {
+        const eGeo = new THREE.SphereGeometry(0.20, 16, 12);
+        eGeo.scale(0.6,1.1,0.3);
+        const eMesh = new THREE.Mesh(eGeo, mat(def.earColor));
+        eMesh.position.set(side*0.56, 0.18, -0.05);
+        eMesh.rotation.z = side * 0.5;
+        maskGroup.add(eMesh);
+      });
+    } else if (type === 'round') {
+      [-1,1].forEach(side => {
+        const eGeo = new THREE.CircleGeometry(0.18, 32);
+        const eMesh = new THREE.Mesh(eGeo, mat(def.earColor));
+        eMesh.position.set(side*0.42, 0.52, 0);
+        maskGroup.add(eMesh);
+        const iGeo = new THREE.CircleGeometry(0.11, 32);
+        const iMesh = new THREE.Mesh(iGeo, flatMat(def.color==='0xffffff'? 0xffcccc : def.earColor));
+        iMesh.position.set(side*0.42, 0.52, 0.01);
+        maskGroup.add(iMesh);
+      });
+    }
+  }
+  addEars(def.ears);
+
+  // ── Eyes ──────────────────────────────────────────────────
+  [-1,1].forEach(side => {
+    // white sclera
+    const scGeo = new THREE.CircleGeometry(0.095, 24);
+    const scMesh = new THREE.Mesh(scGeo, flatMat(0xffffff));
+    scMesh.position.set(side*0.175, 0.065, 0.03);
+    maskGroup.add(scMesh);
+    // iris
+    const irGeo = new THREE.CircleGeometry(0.065, 24);
+    const irMesh = new THREE.Mesh(irGeo, flatMat(animalKey==='fox'?0x44cc88:0x3366ff));
+    irMesh.position.set(side*0.175, 0.065, 0.04);
+    maskGroup.add(irMesh);
+    // pupil
+    const puGeo = new THREE.CircleGeometry(0.035, 24);
+    const puMesh = new THREE.Mesh(puGeo, flatMat(0x111111));
+    puMesh.position.set(side*0.175, 0.065, 0.05);
+    maskGroup.add(puMesh);
+    // shine
+    const shGeo = new THREE.CircleGeometry(0.012, 12);
+    const shMesh = new THREE.Mesh(shGeo, flatMat(0xffffff));
+    shMesh.position.set(side*0.175+0.02, 0.085, 0.06);
+    maskGroup.add(shMesh);
+  });
+
+  // ── Nose ──────────────────────────────────────────────────
+  if (def.nose === 'cat') {
+    const nGeo = new THREE.CircleGeometry(0.055, 3);
+    const nMesh = new THREE.Mesh(nGeo, flatMat(def.noseColor));
+    nMesh.position.set(0, -0.07, 0.04);
+    nMesh.rotation.z = Math.PI;
+    maskGroup.add(nMesh);
+  } else if (def.nose === 'round') {
+    const nGeo = new THREE.SphereGeometry(0.075, 16, 10);
+    nGeo.scale(1.1, 0.75, 0.5);
+    const nMesh = new THREE.Mesh(nGeo, mat(def.noseColor));
+    nMesh.position.set(0, -0.075, 0.05);
+    maskGroup.add(nMesh);
+  } else if (def.nose === 'bear') {
+    const nGeo = new THREE.SphereGeometry(0.11, 16, 10);
+    nGeo.scale(1, 0.65, 0.5);
+    const nMesh = new THREE.Mesh(nGeo, mat(def.noseColor));
+    nMesh.position.set(0, -0.11, 0.05);
+    maskGroup.add(nMesh);
+    // muzzle
+    const mGeo = new THREE.SphereGeometry(0.22, 20, 12);
+    mGeo.scale(1, 0.65, 0.35);
+    const mMesh = new THREE.Mesh(mGeo, mat(def.color==='0x8b6040'?0xc0a070:0xffffff, 0.7));
+    mMesh.position.set(0, -0.13, 0.025);
+    maskGroup.add(mMesh);
+  } else if (def.nose === 'pig') {
+    const nGeo = new THREE.SphereGeometry(0.13, 20, 12);
+    nGeo.scale(1.1, 0.7, 0.5);
+    const nMesh = new THREE.Mesh(nGeo, mat(def.noseColor));
+    nMesh.position.set(0, -0.11, 0.06);
+    maskGroup.add(nMesh);
+    // nostrils
+    [-1,1].forEach(s => {
+      const nrGeo = new THREE.CircleGeometry(0.032, 16);
+      const nrMesh = new THREE.Mesh(nrGeo, flatMat(0xaa5566));
+      nrMesh.position.set(s*0.055, -0.10, 0.09);
+      maskGroup.add(nrMesh);
+    });
+  }
+
+  // ── Whiskers ──────────────────────────────────────────────
+  if (def.whiskers) {
+    const wMat = new THREE.LineBasicMaterial({color:0xffffff, transparent:true, opacity:0.85});
+    [-1,1].forEach(side => {
+      for (let i=0;i<3;i++) {
+        const angle = (-0.3 + i*0.3) * side;
+        const pts = [
+          new THREE.Vector3(side*0.05, -0.09, 0.07),
+          new THREE.Vector3(side*(0.42 + Math.abs(i-1)*0.05), -0.06 + angle*0.1, 0.07)
+        ];
+        const geo = new THREE.BufferGeometry().setFromPoints(pts);
+        maskGroup.add(new THREE.Line(geo, wMat));
+      }
+    });
+  }
+
+  // ── Tiger stripes ─────────────────────────────────────────
+  if (def.stripes) {
+    const sMat = flatMat(0x222200, 0.55);
+    const stripeData = [
+      {x:-0.35, y:0.15, r:0.35, sx:0.06, sy:0.2 },
+      {x: 0.35, y:0.15, r:-0.35,sx:0.06, sy:0.2 },
+      {x:-0.22, y:0.30, r:0.2,  sx:0.055,sy:0.16},
+      {x: 0.22, y:0.30, r:-0.2, sx:0.055,sy:0.16},
+    ];
+    stripeData.forEach(s => {
+      const sGeo = new THREE.PlaneGeometry(s.sx*2, s.sy*2, 1, 1);
+      const sMesh = new THREE.Mesh(sGeo, sMat);
+      sMesh.position.set(s.x, s.y, 0.035);
+      sMesh.rotation.z = s.r;
+      maskGroup.add(sMesh);
+    });
+  }
+
+  // ── Panda patches ─────────────────────────────────────────
+  if (animalKey === 'panda') {
+    [-1,1].forEach(side => {
+      const pGeo = new THREE.CircleGeometry(0.13, 24);
+      const pMesh = new THREE.Mesh(pGeo, flatMat(0x111111, 0.85));
+      pMesh.position.set(side*0.175, 0.065, 0.025);
+      maskGroup.add(pMesh);
+    });
+  }
+
+  scene.add(maskGroup);
+}
+
+// ── Position mask from face landmarks ─────────────────────────
+function updateMaskTransform(landmarks) {
+  if (!maskGroup || !landmarks || landmarks.length < 400) return;
+
+  const W = window.innerWidth, H = window.innerHeight;
+
+  // Key landmarks (MediaPipe 468-point mesh indices)
+  const lm = landmarks;
+  const toNDC = (idx, flipX=true) => {
+    const p = lm[idx];
+    const x = flipX ? (1 - p.x)*2 - 1 : p.x*2 - 1;
+    const y = -(p.y*2 - 1);
+    return new THREE.Vector2(x, y);
+  };
+
+  // Face bounding box from forehead(10) + chin(152) + left(234) + right(454)
+  const top    = toNDC(10);
+  const bottom = toNDC(152);
+  const left   = toNDC(234);
+  const right  = toNDC(454);
+  const nose   = toNDC(1);
+
+  const cx = (left.x + right.x) / 2;
+  const cy = (top.y  + bottom.y) / 2;
+  const faceW = Math.abs(right.x - left.x);
+  const faceH = Math.abs(top.y  - bottom.y);
+  const scale = Math.max(faceW, faceH) * 0.78;
+
+  // Rotation from eye line
+  const leftEye  = toNDC(33);
+  const rightEye = toNDC(263);
+  const roll = Math.atan2(rightEye.y - leftEye.y, rightEye.x - leftEye.x);
+
+  maskGroup.position.set(cx, cy, 0);
+  maskGroup.scale.setScalar(scale);
+  maskGroup.rotation.z = roll;
+}
+
+// ── MediaPipe Face Mesh ───────────────────────────────────────
+let mpReady = false;
+
+function initFaceMesh() {
+  loadingText.textContent = '載入人臉偵測模型…';
+
+  const faceMesh = new FaceMesh({
+    locateFile: f => `https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh@0.4.1633559619/${f}`
+  });
+
+  faceMesh.setOptions({
+    maxNumFaces: 1,
+    refineLandmarks: true,
+    minDetectionConfidence: 0.55,
+    minTrackingConfidence: 0.55
+  });
+
+  faceMesh.onResults(results => {
+    if (!mpReady) {
+      mpReady = true;
+      loadingEl.classList.add('gone');
+    }
+    if (results.multiFaceLandmarks && results.multiFaceLandmarks.length > 0) {
+      faceLandmarks = results.multiFaceLandmarks[0];
+    } else {
+      faceLandmarks = null;
+    }
+  });
+
+  return faceMesh;
+}
+
+// ── Camera ────────────────────────────────────────────────────
+let mpCamera = null;
+let faceMeshInst = null;
+
+async function startCamera() {
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({
+      video: { facingMode: useFrontCam ? 'user' : 'environment', width:{ideal:640}, height:{ideal:480} }
+    });
+    video.srcObject = stream;
+    await video.play();
+
+    faceMeshInst = initFaceMesh();
+
+    mpCamera = new Camera(video, {
+      onFrame: async () => {
+        if (faceMeshInst) await faceMeshInst.send({ image: video });
+      },
+      width:640, height:480
+    });
+    mpCamera.start();
+
+  } catch(e) {
+    loadingEl.classList.add('gone');
+    permPrompt.classList.add('show');
+  }
+}
+
+async function switchCamera() {
+  if (mpCamera) { mpCamera.stop(); mpCamera=null; }
+  if (video.srcObject) video.srcObject.getTracks().forEach(t=>t.stop());
+  useFrontCam = !useFrontCam;
+  video.style.transform = useFrontCam ? 'scaleX(-1)' : 'scaleX(1)';
+  await startCamera();
+}
+
+// ── Speech Recognition ────────────────────────────────────────
+const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+let recog = null;
+
+// Keywords in zh-TW and en
+const ANIMAL_KEYWORDS = {
+  cat:    ['貓','cat','kitty','喵'],
+  dog:    ['狗','dog','puppy','汪'],
+  rabbit: ['兔','兔子','rabbit','bunny'],
+  bear:   ['熊','bear','polar bear'],
+  fox:    ['狐狸','fox'],
+  pig:    ['豬','pig','豬豬'],
+  tiger:  ['老虎','tiger','虎'],
+  panda:  ['熊貓','panda','貓熊'],
+};
+
+function detectAnimalInText(text) {
+  const t = text.toLowerCase();
+  for (const [animal, keywords] of Object.entries(ANIMAL_KEYWORDS)) {
+    for (const kw of keywords) {
+      if (t.includes(kw.toLowerCase())) return animal;
+    }
+  }
+  return null;
+}
+
+function setupSpeech() {
+  if (!SpeechRecognition) {
+    micLabel.textContent = '此瀏覽器不支援語音';
+    micBtn.disabled = true;
+    return;
+  }
+
+  recog = new SpeechRecognition();
+  recog.continuous     = true;
+  recog.interimResults = true;
+  recog.lang           = 'zh-TW';
+
+  recog.onresult = e => {
+    let interim = '', final = '';
+    for (let i = e.resultIndex; i < e.results.length; i++) {
+      const t = e.results[i][0].transcript;
+      if (e.results[i].isFinal) final += t;
+      else interim += t;
+    }
+    const heard = final || interim;
+    if (heard) {
+      speechBubble.textContent = `「${heard}」`;
+      speechBubble.classList.remove('dim');
+    }
+    const detected = detectAnimalInText(heard);
+    if (detected) applyAnimal(detected);
+  };
+
+  recog.onerror = () => {
+    listening = false;
+    micBtn.classList.remove('listening');
+    micLabel.textContent = '點擊開始語音';
+  };
+  recog.onend = () => {
+    if (listening) recog.start(); // auto-restart
+  };
+}
+
+function toggleListening() {
+  if (!recog) return;
+  if (!listening) {
+    recog.start();
+    listening = true;
+    micBtn.classList.add('listening');
+    micLabel.textContent = '聆聽中…說出動物名稱';
+    speechBubble.textContent = '準備好了，說吧！';
+    speechBubble.classList.remove('dim');
+  } else {
+    recog.stop();
+    listening = false;
+    micBtn.classList.remove('listening');
+    micLabel.textContent = '點擊開始語音';
+    speechBubble.textContent = '說出動物名稱或點擊下方按鈕';
+    speechBubble.classList.add('dim');
+  }
+}
+
+// ── Apply animal ──────────────────────────────────────────────
+let labelTimeout = null;
+
+function applyAnimal(key) {
+  if (currentAnimal === key) return;
+  currentAnimal = key;
+  buildMask(key);
+
+  // Update chips
+  chips.forEach(c => c.classList.toggle('active', c.dataset.animal===key));
+
+  // Pop label
+  const def = ANIMALS[key];
+  animalLabel.textContent = `${def.emoji} ${def.label}`;
+  animalLabel.style.color = '#' + def.color.toString(16).padStart(6,'0');
+  animalLabel.classList.remove('hide');
+  animalLabel.classList.add('show');
+  clearTimeout(labelTimeout);
+  labelTimeout = setTimeout(() => {
+    animalLabel.classList.remove('show');
+    animalLabel.classList.add('hide');
+  }, 2000);
+}
+
+function clearAnimal() {
+  currentAnimal = null;
+  disposeMask();
+  chips.forEach(c=>c.classList.remove('active'));
+}
+
+// ── Render loop ───────────────────────────────────────────────
+function onResize() {
+  renderer.setSize(window.innerWidth, window.innerHeight);
+}
+window.addEventListener('resize', onResize);
+
+function animate() {
+  requestAnimationFrame(animate);
+  if (faceLandmarks && maskGroup) {
+    updateMaskTransform(faceLandmarks);
+  }
+  renderer.render(scene, camera);
+}
+animate();
+
+// ── Event listeners ───────────────────────────────────────────
+micBtn.addEventListener('click', toggleListening);
+camToggle.addEventListener('click', switchCamera);
+
+chips.forEach(chip => {
+  chip.addEventListener('click', () => {
+    if (chip.classList.contains('active')) {
+      clearAnimal();
+    } else {
+      applyAnimal(chip.dataset.animal);
+    }
+  });
+});
+
+document.getElementById('perm-btn').addEventListener('click', () => {
+  permPrompt.classList.remove('show');
+  loadingEl.classList.remove('gone');
+  startCamera();
+});
+
+// ── Init ──────────────────────────────────────────────────────
+setupSpeech();
+startCamera();
+</script>
+</body>
+</html>
